@@ -1,0 +1,28 @@
+{
+  "_comment": "Example Project Launcher config. Copy to ~/.config/projectlauncher/projects.json (the app offers this on first run). Paths are relative to ~; icons are relative to this file's folder. See the README for every field.",
+  "projects": [
+    {
+      "id": "myapp",
+      "name": "My App",
+      "description": "Django API, Vite frontend and a Celery worker",
+      "path": "~/projects/myapp",
+      "repo": "your-github-user/myapp",
+      "launcher": "~/projects/myapp/StartMyAppDev.app",
+      "icon": "icons/example.png",
+      "url": "http://localhost:5180/",
+      "match": { "variable": "user.MyAppSession" }
+    },
+    {
+      "id": "oldproject",
+      "name": "Old Project",
+      "description": "Turned off: hidden from the picker until it's switched back on",
+      "enabled": false,
+      "path": "~/projects/oldproject",
+      "repo": "your-github-user/oldproject",
+      "launcher": "~/projects/oldproject/StartOldProjectDev.app",
+      "url": "http://localhost:5181/",
+      "match": { "variable": "user.OldProjectSession" },
+      "idlePanes": ["Working"]
+    }
+  ]
+}

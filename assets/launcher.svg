@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Project Launcher app icon: macOS icon grid (824px body), tiles tinted from each project's logo -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b3140"/><stop offset="1" stop-color="#151922"/></linearGradient>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="12" stdDeviation="14" flood-opacity=".35"/></filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#sh)"/>
+  <rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="#fff" stroke-opacity=".08" stroke-width="4"/>
+  <g transform="translate(212 212)">
+    <rect x="0"   y="0"   width="176" height="176" rx="40" fill="#13392f"/>
+    <rect x="212" y="0"   width="176" height="176" rx="40" fill="#9c1c24"/>
+    <rect x="424" y="0"   width="176" height="176" rx="40" fill="#26bfd3"/>
+    <rect x="0"   y="212" width="176" height="176" rx="40" fill="#f5f0e6"/>
+    <rect x="424" y="212" width="176" height="176" rx="40" fill="#2a64b0"/>
+    <rect x="0"   y="424" width="176" height="176" rx="40" fill="#8a1f1c"/>
+    <rect x="212" y="424" width="176" height="176" rx="40" fill="#f5bc2b"/>
+    <rect x="424" y="424" width="176" height="176" rx="40" fill="#f08a24"/>
+    <rect x="212" y="212" width="176" height="176" rx="40" fill="#ffffff"/>
+    <path d="M276 258 L346 300 L276 342 Z" fill="#151922" stroke="#151922" stroke-width="14" stroke-linejoin="round"/>
+  </g>
+</svg>

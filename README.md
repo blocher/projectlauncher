@@ -54,6 +54,34 @@ runs `gh repo clone owner/name <path>`.
 **Turning projects off:** uncheck a project in the editor to hide it from the picker without deleting it (it's saved
 as `"enabled": false`). Check it again when you pick the project back up.
 
+## Creating a launcher for a repo
+
+Project Launcher can generate a standalone launcher for any repo: a `Start<Name>Dev.applescript` plus compiled `.app`
+that live in the repo and need nothing but macOS and iTerm2. Anyone who clones the repo can double-click it.
+
+1. **Edit Projects… → + → New Project from Folder…**, then pick the repo.
+2. A draft appears straight away, from the repo's files: Django or Rails or FastAPI backends, Vite or Next
+   frontends, Celery queues, Redis, virtualenvs or `uv`, `.env` files. It's given a free block of ports that no other
+   project (and nothing listening now) uses.
+3. Optionally click **Improve with Claude**. Claude Code reads the repo (read-only tools), refines the panes, and
+   proposes the **config changes** the new ports need (Vite port and proxy, Django CORS/CSRF dev defaults,
+   `.env.example`…). Only the changes you leave checked are applied. Needs the `claude` command, signed in once
+   with `claude` → `/login`.
+4. Adjust panes, commands and ports (or the raw spec under **Edit the spec as JSON**), then click
+   **Write Launcher**. It's written to the repo, committed and pushed if you leave those boxes checked, and added
+   to your projects.
+
+Each generated launcher's form in the editor has **Edit Launcher…** (change its panes, commands and ports) and
+**Regenerate Launcher** (rebuild it from its embedded spec after Project Launcher's template improves).
+
+The generator also works from the command line; see [generator/SPEC.md](generator/SPEC.md):
+
+```bash
+python3 generator/launcher.py detect ~/projects/myapp > draft.json
+python3 generator/launcher.py render spec.json --repo ~/projects/myapp
+python3 generator/launcher.py regenerate ~/projects/myapp/StartMyAppDev.applescript
+```
+
 ## Editing projects
 
 Choose **Edit Projects…** from the picker (or press ⌘, while the app is frontmost).
@@ -116,10 +144,6 @@ Installing projects and cloning a config need the [GitHub CLI](https://cli.githu
 ```
 
 That prints the status the picker would show, which helps when debugging.
-
-## Roadmap
-
-Generating standalone launchers for any repo, from its stack, is planned; see [PLAN.md](PLAN.md).
 
 ## License
 

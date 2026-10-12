@@ -126,13 +126,17 @@ enum GitHub {
         run("/usr/bin/git", ["-C", folder.path] + arguments, in: folder, timeout: timeout)
     }
 
-    private static func run(_ tool: String, _ arguments: [String], in folder: URL?, timeout: TimeInterval) -> Result<String, Failure> {
+    static var gitEnvironment: [String: String] {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = searchPath
         environment["GIT_TERMINAL_PROMPT"] = "0"  // Fail instead of waiting on a password prompt nobody can see.
         environment["GIT_HTTP_LOW_SPEED_LIMIT"] = "1000"  // Abandon transfers stuck under 1 KB/s…
         environment["GIT_HTTP_LOW_SPEED_TIME"] = "30"  // …for 30 seconds.
-        let output = Shell.run(tool, arguments, in: folder, environment: environment, timeout: timeout)
+        return environment
+    }
+
+    private static func run(_ tool: String, _ arguments: [String], in folder: URL?, timeout: TimeInterval) -> Result<String, Failure> {
+        let output = Shell.run(tool, arguments, in: folder, environment: gitEnvironment, timeout: timeout)
         if output.timedOut {
             return .failure(Failure(message: "\((tool as NSString).lastPathComponent) \(arguments.first ?? "") timed out."))
         }

@@ -17,6 +17,12 @@ struct ProjectsEditorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(item: $model.launcherDraft) { draft in
+            LauncherDraftView(model: draft) {
+                if case .edit(let launcher) = draft.mode { model.forgetDetection(for: launcher) }
+                model.launcherDraft = nil
+            }
+        }
     }
 
     private var editor: some View {
@@ -63,7 +69,9 @@ struct ProjectsEditorView: View {
             )
             HStack(spacing: 2) {
                 Menu {
+                    Button("New Project from Folder…") { chooseFolderForNewProject() }
                     Button("Add from Launcher App…") { chooseLauncherToAdd() }
+                    Divider()
                     Button("Add Blank Project") { model.addBlank() }
                 } label: {
                     Image(systemName: "plus").frame(width: 22, height: 20)
@@ -123,6 +131,16 @@ struct ProjectsEditorView: View {
                 .disabled(!model.canSave)
         }
         .padding(12)
+    }
+
+    private func chooseFolderForNewProject() {
+        let panel = NSOpenPanel()
+        panel.message = "Choose the project's repo folder. Project Launcher drafts a launcher for it."
+        panel.prompt = "Draft Launcher"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("projects")
+        if panel.runModal() == .OK, let url = panel.url { model.newProject(fromFolder: url) }
     }
 
     private func chooseLauncherToAdd() {
@@ -234,6 +252,14 @@ private struct ProjectForm: View {
                 PathField(title: "Launcher", path: $draft.project.launcher, choosesApp: true)
                 LabeledContent {
                     VStack(alignment: .trailing, spacing: 4) {
+                        if model.detection(for: draft)?.spec != nil {
+                            HStack {
+                                Button("Edit Launcher…") { model.editLauncher(for: draft.id) }
+                                    .help("Change the generated launcher's panes, commands and ports")
+                                Button("Regenerate Launcher") { model.regenerateLauncher(for: draft.id) }
+                                    .help("Rebuild it from its embedded spec, e.g. after Project Launcher's template improved")
+                            }
+                        }
                         Button("Detect Settings from Launcher") { model.applyDetection(to: draft.id) }
                             .disabled(!FileManager.default.fileExists(atPath: draft.project.launcherURL.path))
                         if let detection = model.detection(for: draft) {

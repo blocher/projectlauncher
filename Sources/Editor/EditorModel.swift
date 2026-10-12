@@ -37,6 +37,8 @@ final class EditorModel: ObservableObject {
     @Published private(set) var isSettingUp = false
     /// True while "Add from Launcher App…" inspects the launcher and project.
     @Published private(set) var isAdding = false
+    /// The New/Edit Launcher window, when open.
+    @Published var launcherDraft: LauncherDraftModel?
 
     private(set) var fileURL: URL
     private var savedProjects: [Project] = []
@@ -294,7 +296,7 @@ final class EditorModel: ObservableObject {
 
     /// Adds a project from its launcher app, filling in everything the launcher's script reveals.
     /// Inspecting the launcher and searching the project for a logo can take a while, so it runs off the main thread.
-    func add(launcher app: URL) {
+    func add(launcher app: URL, then completion: (() -> Void)? = nil) {
         isAdding = true
         Task {
             let (detection, repo, logo) = await Task.detached {
@@ -317,7 +319,68 @@ final class EditorModel: ObservableObject {
             let draft = ProjectDraft(project: project, pendingIcon: logo)
             drafts.append(draft)
             selection = draft.id
+            completion?()
         }
+    }
+
+    // MARK: - Generated launchers
+
+    /// Opens the New Launcher window for a repo. When it writes the launcher, the project is added and saved.
+    func newProject(fromFolder folder: URL) {
+        Task { [weak self] in
+            guard let self else { return }
+            let taken = await takenPorts(excludingProject: nil)
+            let draft = LauncherDraftModel(repo: folder, mode: .new, taken: taken)
+            draft.onCreated = { [weak self] app in
+                self?.add(launcher: app) { self?.save() }
+            }
+            launcherDraft = draft
+        }
+    }
+
+    /// Opens a generated launcher's spec for editing; writing it regenerates the launcher in place.
+    func editLauncher(for id: ProjectDraft.ID) {
+        guard let project = drafts.first(where: { $0.id == id })?.project else { return }
+        Task {
+            let taken = await takenPorts(excludingProject: project.id)
+            launcherDraft = LauncherDraftModel(repo: project.launcherURL.deletingLastPathComponent(), mode: .edit(launcher: project.launcherURL), taken: taken)
+        }
+    }
+
+    /// Rebuilds a generated launcher from its embedded spec (e.g. after the template improved).
+    func regenerateLauncher(for id: ProjectDraft.ID) {
+        guard let project = drafts.first(where: { $0.id == id })?.project else { return }
+        let launcher = project.launcherURL.deletingPathExtension().appendingPathExtension("applescript")
+        syncStatus = "Regenerating \(project.launcherURL.lastPathComponent)…"
+        Task {
+            let result = await Task.detached { Generator.regenerate(launcher) }.value
+            switch result {
+            case .success: syncStatus = "Regenerated \(project.launcherURL.lastPathComponent). Commit it in \(project.path)."
+            case .failure(let failure): saveError = "Couldn't regenerate: \(failure.message)"
+            }
+            forgetDetection(for: project.launcherURL)
+        }
+    }
+
+    /// Drops the cached launcher inspection so the form re-reads it.
+    func forgetDetection(for launcher: URL) {
+        detections[launcher.path] = nil
+    }
+
+    /// Ports a new launcher must avoid: every other project's generated ports, plus anything listening right now.
+    private func takenPorts(excludingProject projectID: String?) async -> Set<Int> {
+        let launchers = drafts.filter { $0.project.id != projectID }.map(\.project.launcherURL)
+        return await Task.detached {
+            var ports = Set<Int>()
+            for launcher in launchers where FileManager.default.fileExists(atPath: launcher.path) {
+                ports.formUnion(LauncherInspector.inspect(launcher).spec?.panes.compactMap(\.port) ?? [])
+            }
+            let listening = Shell.run("/usr/sbin/lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fn"], timeout: 10).stdout
+            for line in listening.split(separator: "\n") where line.hasPrefix("n") {
+                if let port = line.split(separator: ":").last.flatMap({ Int($0) }) { ports.insert(port) }
+            }
+            return ports
+        }.value
     }
 
     /// Fills in the GitHub repo from the project folder's `origin` remote.

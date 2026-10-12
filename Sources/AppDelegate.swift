@@ -12,6 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var visibleRows: [String: NSMenuItem] = [:]
     private var polling = false
     private var pickerPendingActivation = false
+    private var pickerIsOpen = false
+    /// Set when the picker's chosen action opens the editor, so the picker doesn't hide the app on the way out.
+    private var openEditorAfterPicker = false
     private var editor: EditorWindowController?
     /// Projects being cloned from GitHub right now.
     private var installing: Set<String> = []
@@ -168,10 +171,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = buildMenu(forDock: false)
         NSApp.activate()
         refresh(fresh: true)
+        pickerIsOpen = true
         menu.popUp(positioning: nil, at: pickerOrigin(for: menu), in: nil)
+        pickerIsOpen = false
         visibleRows = [:]
-        // Hand focus back to whatever was frontmost (or to the app an action just opened).
-        if editor?.window?.isVisible != true { NSApp.hide(nil) }
+        if openEditorAfterPicker {
+            // Still the active app, so the editor can come forward. Hiding first would hand focus away for good:
+            // macOS only lets an app reactivate when the active app yields to it.
+            openEditorAfterPicker = false
+            presentEditor()
+        } else if editor?.window?.isVisible != true {
+            // Hand focus back to whatever was frontmost (or to the app an action just opened).
+            NSApp.hide(nil)
+        }
     }
 
     /// Places the picker just above (or beside) the Dock, under the pointer.
@@ -495,10 +507,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func editProjects() {
+        if pickerIsOpen {
+            openEditorAfterPicker = true
+        } else {
+            presentEditor()
+        }
+    }
+
+    private func presentEditor() {
         let editor = editor ?? EditorWindowController(configURL: ConfigStore.current().fileURL)
         self.editor = editor
-        // Deferred so it lands after the picker's tracking loop (and its hide) has finished.
-        DispatchQueue.main.async { editor.show() }
+        editor.show()
     }
 
     @objc private func openAutomationSettings() {

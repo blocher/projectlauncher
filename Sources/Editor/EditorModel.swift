@@ -122,16 +122,20 @@ final class EditorModel: ObservableObject {
         }
     }
 
-    /// Pulls edits made on other Macs, then reloads. Skipped when there's unsaved work here.
+    /// Shows what's on disk right away, then pulls edits made on other Macs and reloads if anything changed.
+    /// The reload is skipped once there's unsaved work here.
     func pullAndLoad() {
-        guard !isDirty, !needsSetup else { return load() }
+        guard !isDirty else { return }
+        load()
+        guard !needsSetup, GitHub.isRepository(baseURL) else { return }
         let folder = baseURL
+        let before = try? Data(contentsOf: fileURL)
         Task {
             let result = await Task.detached { GitHub.pull(folder) }.value
             if case .failure(let failure) = result {
                 syncStatus = "Couldn't pull the latest config: \(failure.message)"
             }
-            if !isDirty { load() }
+            if !isDirty, (try? Data(contentsOf: fileURL)) != before { load() }
         }
     }
 

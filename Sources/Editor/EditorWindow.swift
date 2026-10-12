@@ -40,11 +40,12 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     func show() {
         // Pick up edits made to projects.json elsewhere (including other Macs), unless there's unsaved work here.
         if !(window?.isVisible ?? false), !model.isDirty { model.pullAndLoad() }
-        // The picker hides the app when it closes; this may run just after.
         NSApp.unhide(nil)
         NSApp.activate()
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+        // If macOS declines the activation (e.g. opened from the Dock menu), still put the window in front of others.
+        window?.orderFrontRegardless()
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {

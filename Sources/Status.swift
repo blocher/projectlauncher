@@ -57,8 +57,10 @@ struct ProjectStatus {
         let idle = project.idlePanes ?? []
         var status = ProjectStatus(health: .running, windowID: windowID)
         for pane in matching where pane.windowID == windowID {
-            // A window-level match tags every pane alike, so fall back to the pane's name.
-            let role = project.match.equals == nil ? pane.values[variable] ?? pane.name : pane.name
+            // Generated launchers tag each pane's role. Older ones either put the role in the match variable or,
+            // when they tag the whole window alike, leave only the pane's name to go on.
+            let role = !pane.role.isEmpty ? pane.role
+                : project.match.equals == nil ? pane.values[variable] ?? pane.name : pane.name
             if idle.contains(where: { role == $0 || pane.name.hasPrefix($0) }) { continue }
             status.services += 1
             if !busyTTYs.contains(pane.tty) { status.down.append(role) }

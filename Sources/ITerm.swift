@@ -8,6 +8,8 @@ struct Pane {
     let name: String
     /// Requested variable → value ("" when unset).
     let values: [String: String]
+    /// `user.launcherPane`, set by generated launchers on every pane ("" for older launchers).
+    var role: String = ""
 }
 
 struct ScanResult {
@@ -82,7 +84,9 @@ enum ITerm {
                                         tell s
                                             set val to variable named projVar
                                             if val is missing value then set val to ""
-                                            set out to out & "S" & TB & wid & TB & projVar & TB & (tty as text) & TB & (name as text) & TB & val & LF
+                                            set paneRole to variable named "user.launcherPane"
+                                            if paneRole is missing value then set paneRole to ""
+                                            set out to out & "S" & TB & wid & TB & projVar & TB & (tty as text) & TB & (name as text) & TB & val & TB & paneRole & LF
                                         end tell
                                     end try
                                 end repeat
@@ -106,9 +110,9 @@ enum ITerm {
                 switch (f.first, f.count) {
                 case ("K", 2): result.skipped.insert(f[1])
                 case ("N", 2): result.unclaimed.insert(f[1])
-                case ("S", 6):
+                case ("S", 7):
                     let tty = (f[3] as NSString).lastPathComponent
-                    result.panes.append(Pane(windowID: f[1], tty: tty, name: f[4], values: [f[2]: f[5]]))
+                    result.panes.append(Pane(windowID: f[1], tty: tty, name: f[4], values: [f[2]: f[5]], role: f[6]))
                 default: continue
                 }
             }

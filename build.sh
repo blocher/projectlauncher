@@ -27,6 +27,9 @@ swiftc -O -swift-version 5 -target arm64-apple-macos15.0 \
 
 # Starting point for "Create New Config" on first run. Your own config lives in ~/.config/projectlauncher.
 /bin/cp -R "$ROOT/examples" "$APP/Contents/Resources/examples"
+# The launcher generator, run with the system python3 to render and regenerate launchers.
+/bin/cp -R "$ROOT/generator" "$APP/Contents/Resources/generator"
+/bin/rm -rf "$APP/Contents/Resources/generator/__pycache__"
 
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

@@ -12,13 +12,44 @@ struct GeneratorSpec: Codable, Equatable {
         var env: [String]?
         var setup: [String]?
         var waitFor: [String]?
-        var enabledBy: String?
+        var enabledBy: EnabledBy?
         var color: String?
         var message: Message?
         var command: String?
 
         private enum CodingKeys: String, CodingKey {
             case role, note, dir, port, freePort, env, setup, waitFor, enabledBy, color, message, command
+        }
+    }
+
+    /// `"VARIABLE"`, or `{"variable": "VARIABLE", "files": [...]}` to read it from specific env files.
+    struct EnabledBy: Codable, Equatable {
+        var variable: String
+        var files: [String]?
+
+        init(from decoder: Decoder) throws {
+            if let variable = try? decoder.singleValueContainer().decode(String.self) {
+                self.variable = variable
+                return
+            }
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            variable = try container.decode(String.self, forKey: .variable)
+            files = try container.decodeIfPresent([String].self, forKey: .files)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            if files == nil {
+                var container = encoder.singleValueContainer()
+                try container.encode(variable)
+            } else {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(variable, forKey: .variable)
+                try container.encodeIfPresent(files, forKey: .files)
+            }
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case variable, files
         }
     }
 

@@ -53,7 +53,7 @@ python3 launcher.py validate spec.json
 | `openWhenReady` | Optional pane role whose port gates the browser. Default: the pane the URL's port belongs to |
 | `focus` | Optional pane role to leave selected |
 | `requires` | Tools that must be on the login shell's PATH; the launcher stops with a clear message if any are missing |
-| `env` | Dotenv files (relative to the repo) loaded into every pane, when present |
+| `env` | Dotenv files (relative to the repo) loaded into every pane, when present. They're sourced by the shell, so they must be valid shell (`KEY=value`, values with spaces or symbols quoted); leave out files only the app itself reads |
 | `setup` | Shell lines run in every pane after `cd`, before the pane's own setup |
 | `preLaunch` | Steps run once before iTerm opens, in a login shell at the repo root: `"cmd"` or `{"run": "cmd", "label": "…", "background": true}`. A failing step asks whether to continue |
 | `panes` | In order, top to bottom. The last one is usually the Working shell |
@@ -70,7 +70,7 @@ python3 launcher.py validate spec.json
 | `message` | A line, or a list of lines, printed before the command (e.g. tips for the Working shell). To print it after a quick command such as `git status`, put that command in `setup` |
 | `command` | What the pane runs |
 | `color` | Tab color, `#RRGGBB` |
-| `enabledBy` | Environment variable that turns the pane on (`1`, `true`, `yes` or `on`), read from the login shell and the env files. Not allowed on the first pane |
+| `enabledBy` | Environment variable that turns the pane on (`1`, `true`, `yes` or `on`, any case). The login shell's value wins; otherwise it's read from the env files (`KEY=value` lines). Use `{"variable": "NAME", "files": ["path/.env"]}` to read other files without loading them into the pane. Not allowed on the first pane |
 | `note` | A comment above the pane in the generated script |
 
 ## Placeholders

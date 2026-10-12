@@ -115,6 +115,13 @@ def validate(spec: dict) -> None:
                 fail(f"{where} waits for {target}, which isn't a pane with a port")
         if pane.get("color") and not re.fullmatch(r"#[0-9A-Fa-f]{6}", pane["color"]):
             fail(f"{where} color must look like #RRGGBB")
+        enabled_by = pane.get("enabledBy")
+        if enabled_by is not None:
+            variable = enabled_by.get("variable") if isinstance(enabled_by, dict) else enabled_by
+            if not isinstance(variable, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", variable):
+                fail(f"{where} enabledBy must name an environment variable")
+            if isinstance(enabled_by, dict) and not all(isinstance(f, str) for f in enabled_by.get("files", [])):
+                fail(f"{where} enabledBy files must be paths")
 
 
 def launcher_name(spec: dict) -> str:
@@ -281,14 +288,9 @@ def render(spec: dict) -> str:
     conditional = [pane for pane in spec["panes"] if pane.get("enabledBy")]
     if conditional:
         add("")
-        add("\t-- Optional panes turn on with an environment variable (from your shell or the project's env files).")
-        env_files = " ".join(
-            f'[ -f {shell_quote(f)} ] && . {shell_quote(f)};' for f in spec.get("env", []) + [e for p in spec["panes"] for e in p.get("env", [])]
-        )
+        add("\t-- Optional panes turn on with an environment variable: from your shell first, else from env files.")
         for pane in conditional:
-            variable = pane["enabledBy"]
-            check = f'set -a; {env_files} set +a; case "${{{variable}:-}}" in 1|true|TRUE|yes|on) echo on;; esac'
-            add(f"\tset {pane_variable(pane)}Enabled to (loginShell(projectRoot, {applescript_string(check)}) is \"on\")")
+            add(f"\tset {pane_variable(pane)}Enabled to (loginShell(projectRoot, {applescript_string(enabled_check(spec, pane))}) is \"on\")")
 
     add("")
     add("\ttell application \"Finder\" to set screenBounds to bounds of window of desktop")
@@ -371,6 +373,27 @@ def render(spec: dict) -> str:
     add('\treturn do shell script "/bin/zsh -lc " & quoted form of ("cd " & quoted form of projectRoot & " && " & command)')
     add("end loginShell")
     return "\n".join(out) + "\n"
+
+
+def enabled_check(spec: dict, pane: dict) -> str:
+    """Shell that prints "on" when the pane's variable is 1/true/yes/on (any case). The shell's own environment wins;
+    otherwise KEY=value lines are read from the env files. They're parsed rather than sourced, since real .env files
+    aren't always valid shell."""
+    enabled_by = pane["enabledBy"]
+    if isinstance(enabled_by, dict):
+        variable, files = enabled_by["variable"], enabled_by.get("files", [])
+    else:
+        variable, files = enabled_by, spec.get("env", []) + pane.get("env", [])
+    pattern = f"^[[:space:]]*(export[[:space:]]+)?{variable}[[:space:]]*="
+    reads = "".join(
+        f'[ -z "$v" ] && [ -f {shell_quote(f)} ] && v=$(grep -E {shell_quote(pattern)} {shell_quote(f)} | tail -n 1 | cut -d= -f2-); '
+        for f in files
+    )
+    return (
+        f'v="${{{variable}:-}}"; {reads}'
+        f"""v=$(printf '%s' "$v" | tr -d "\\"' " | tr '[:upper:]' '[:lower:]'); """
+        'case "$v" in 1|true|yes|on) echo on;; esac; true'
+    )
 
 
 def browser_gate(spec: dict) -> str | None:

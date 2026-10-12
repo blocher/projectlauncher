@@ -130,9 +130,19 @@ enum ITerm {
         """)
     }
 
+    /// Sends every pane Ctrl-C, gives servers a moment to shut down, then closes the window. Closing alone leaves
+    /// servers that ignore hang-ups (such as redis-server) running.
     static func close(windowID: String, completion: @escaping () -> Void) {
         guard let id = Int(windowID) else { return }
-        runAppleScriptInBackground("tell application \"iTerm\" to close window id \(id)", completion: completion)
+        runAppleScriptInBackground("""
+        tell application "iTerm"
+            repeat with s in sessions of current tab of window id \(id)
+                tell s to write text (character id 3) newline no
+            end repeat
+            delay 1.5
+            close window id \(id)
+        end tell
+        """, completion: completion)
     }
 
     private static func literal(_ string: String) -> String {

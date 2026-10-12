@@ -67,7 +67,7 @@ python3 launcher.py validate spec.json
 | `port` | The port this pane serves. Listeners on it are stopped before it starts (`freePort: false` to skip) |
 | `env`, `setup` | As above, for this pane only |
 | `waitFor` | Roles of panes whose ports must answer before this pane's command runs |
-| `message` | A line printed before the command, e.g. tips for the Working shell |
+| `message` | A line, or a list of lines, printed before the command (e.g. tips for the Working shell). To print it after a quick command such as `git status`, put that command in `setup` |
 | `command` | What the pane runs |
 | `color` | Tab color, `#RRGGBB` |
 | `enabledBy` | Environment variable that turns the pane on (`1`, `true`, `yes` or `on`), read from the login shell and the env files. Not allowed on the first pane |
@@ -90,7 +90,8 @@ effect. The browser URL always uses the spec's default ports.
 
 - Finds the repo from its own location, so it works in any clone, fork or folder name.
 - Checks for iTerm2 and the `requires` tools before doing anything.
-- Replaces the window it opened last time (found by `user.launcherProject`) and leaves other iTerm windows alone.
+- Replaces the window it opened last time (found by `user.launcherProject`), sending each pane Ctrl-C first so
+  servers shut down cleanly, and leaves other iTerm windows alone.
 - Stops only processes **listening** on the project's own ports.
 - Waits for real readiness (`nc -z`) instead of sleeping.
 - Tags every pane so Project Launcher can show live status without per-project settings.

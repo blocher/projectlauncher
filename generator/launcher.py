@@ -103,9 +103,11 @@ def validate(spec: dict) -> None:
         where = f'pane "{pane["role"]}"'
         for line in pane.get("setup", []):
             check_text(where, line, pane)
-        for key in ("command", "message"):
-            if key in pane:
-                check_text(where, pane[key], pane)
+        if "command" in pane:
+            check_text(where, pane["command"], pane)
+        message = pane.get("message", [])
+        for line in message if isinstance(message, list) else [message]:
+            check_text(f"{where} message", line, pane)
         for target in pane.get("waitFor", []):
             if target not in roles or "port" not in panes[roles.index(target)]:
                 fail(f"{where} waits for {target}, which isn't a pane with a port")
@@ -197,8 +199,10 @@ def pane_lines(spec: dict, pane: dict) -> list[str]:
             f"until nc -z 127.0.0.1 {variable} 2>/dev/null; do sleep 0.3; done"
         ))
     if pane.get("message"):
-        message = expression(spec, pane["message"], pane, for_shell=False)
-        lines.append(f'"printf \'%s\\\\n\' " & quoted form of ({message})')
+        # printf reuses its format for every argument, so each line of the message is printed on its own line.
+        message = pane["message"] if isinstance(pane["message"], list) else [pane["message"]]
+        arguments = " & \" \" & ".join(f"quoted form of ({expression(spec, line, pane, for_shell=False)})" for line in message)
+        lines.append(f'"printf \'%s\\\\n\' " & {arguments}')
     if pane.get("command"):
         lines.append(expression(spec, pane["command"], pane))
     return lines
@@ -275,16 +279,18 @@ def render(spec: dict) -> str:
     add("")
     add('\ttell application "iTerm"')
     add("\t\tactivate")
-    add("\t\t-- Rerunning replaces this project's window; other iTerm windows are untouched.")
+    add("\t\t-- Rerunning replaces this project's window; other iTerm windows are untouched. Each pane gets Ctrl-C")
+    add("\t\t-- first: closing alone leaves servers that ignore hang-ups (redis-server) running.")
     add("\t\trepeat with existingWindow in windows")
     add("\t\t\ttry")
-    add("\t\t\t\trepeat with existingSession in sessions of current tab of existingWindow")
-    add(f"\t\t\t\t\ttell existingSession to set existingTag to variable named {applescript_string(PROJECT_TAG)}")
-    add("\t\t\t\t\tif existingTag is my projectID then")
-    add("\t\t\t\t\t\tclose existingWindow")
-    add("\t\t\t\t\t\texit repeat")
-    add("\t\t\t\t\tend if")
-    add("\t\t\t\tend repeat")
+    add(f"\t\t\t\ttell current session of current tab of existingWindow to set existingTag to variable named {applescript_string(PROJECT_TAG)}")
+    add("\t\t\t\tif existingTag is my projectID then")
+    add("\t\t\t\t\trepeat with existingSession in sessions of current tab of existingWindow")
+    add("\t\t\t\t\t\ttell existingSession to write text (character id 3) newline no")
+    add("\t\t\t\t\tend repeat")
+    add("\t\t\t\t\tdelay 1.5")
+    add("\t\t\t\t\tclose existingWindow")
+    add("\t\t\t\tend if")
     add("\t\t\tend try")
     add("\t\tend repeat")
     add("")

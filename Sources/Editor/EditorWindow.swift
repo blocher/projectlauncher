@@ -6,6 +6,7 @@ import SwiftUI
 final class EditorWindowController: NSWindowController, NSWindowDelegate {
     private let model: EditorModel
     private var dirtyObserver: AnyCancellable?
+    private var configObserver: NSObjectProtocol?
 
     init(configURL: URL) {
         model = EditorModel(fileURL: configURL)
@@ -20,6 +21,11 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.setFrameAutosaveName("ProjectsEditor")
         super.init(window: window)
         window.delegate = self
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .configDidChangeOnDisk, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.model.reloadIfChangedOnDisk() }
+        }
 
         // objectWillChange fires before the change lands, so read isDirty on the next turn.
         dirtyObserver = model.objectWillChange.sink { [weak self] in
@@ -46,6 +52,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
         // If macOS declines the activation (e.g. opened from the Dock menu), still put the window in front of others.
         window?.orderFrontRegardless()
+    }
+
+    /// Picks up files changed outside the editor (a pull, a hand edit) when you come back to the window.
+    func windowDidBecomeKey(_ notification: Notification) {
+        model.reloadIfChangedOnDisk()
+    }
+
+    /// Asked before quitting, so unsaved edits aren't dropped silently.
+    func confirmDiscardingChanges() -> Bool {
+        guard window?.isVisible == true else { return true }
+        return windowShouldClose(window!)
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {

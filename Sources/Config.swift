@@ -109,22 +109,31 @@ final class ConfigStore {
         ConfigStore(fileURL: folder.appendingPathComponent("projects.json"))
     }
 
-    var exists: Bool { FileManager.default.fileExists(atPath: fileURL.path) }
+    /// A config is available: on disk now, or loaded earlier (git rewrites files in place during a pull, so
+    /// projects.json can vanish or be half-written for a moment).
+    var exists: Bool { hasLoaded || FileManager.default.fileExists(atPath: fileURL.path) }
+    private var hasLoaded = false
 
     /// Returns true when the project list was (re)loaded.
     @discardableResult
     func reloadIfChanged() -> Bool {
         let modDate = (try? FileManager.default.attributesOfItem(atPath: fileURL.path))?[.modificationDate] as? Date
         if modDate != nil, modDate == loadedModDate { return false }
-        loadedModDate = modDate
         do {
             let data = try Data(contentsOf: fileURL)
             projects = try JSONDecoder().decode(ConfigFile.self, from: data).projects
+            loadedModDate = modDate
+            hasLoaded = true
             error = nil
+            return true
         } catch {
+            // Keep the last good list through a momentary gap (e.g. mid-pull) and retry on the next call;
+            // only report the problem when there's nothing good to fall back on.
+            loadedModDate = nil
+            guard !hasLoaded else { return false }
             self.error = "Couldn't read \(fileURL.lastPathComponent): \(error.localizedDescription)"
+            return true
         }
-        return true
     }
 
     func project(id: String) -> Project? {
@@ -147,4 +156,6 @@ final class ConfigStore {
 extension Notification.Name {
     /// Posted after the editor points Project Launcher at a different config folder.
     static let configFolderDidChange = Notification.Name("ProjectLauncherConfigFolderDidChange")
+    /// Posted after a background pull changed projects.json, so an open editor can reload.
+    static let configDidChangeOnDisk = Notification.Name("ProjectLauncherConfigDidChangeOnDisk")
 }

@@ -3,19 +3,26 @@ import UniformTypeIdentifiers
 
 struct ProjectsEditorView: View {
     @ObservedObject var model: EditorModel
+    /// The project awaiting delete confirmation from the sidebar (context menu or the − button).
+    @State private var pendingDelete: ProjectDraft.ID?
 
     var body: some View {
-        if model.needsSetup {
-            SetupView(model: model)
-        } else {
-            editor
+        // Both branches fill the window explicitly. A conditional root isn't stretched by the hosting view,
+        // so without this the split view shrank to its ideal height and floated in the middle of the window.
+        Group {
+            if model.needsSetup {
+                SetupView(model: model)
+            } else {
+                editor
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var editor: some View {
         HSplitView {
             sidebar
-                .frame(minWidth: 210, idealWidth: 240, maxWidth: 340)
+                .frame(minWidth: 210, idealWidth: 240, maxWidth: 340, maxHeight: .infinity)
             VStack(spacing: 0) {
                 if let id = model.selection, let draft = model.binding(for: id) {
                     ProjectForm(draft: draft, model: model)
@@ -27,22 +34,33 @@ struct ProjectsEditorView: View {
                 Divider()
                 footer
             }
-            .frame(minWidth: 480)
+            .frame(minWidth: 480, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var sidebar: some View {
         VStack(spacing: 0) {
             List(selection: $model.selection) {
+                // Rows bind by ID, not array index: a reload can replace `drafts` while rows are still on screen.
                 ForEach(model.drafts) { draft in
-                    if let binding = model.binding(for: draft.id) {
-                        SidebarRow(draft: binding, model: model)
-                            .tag(draft.id)
-                    }
+                    let binding = model.binding(for: draft.id) ?? .constant(draft)
+                    SidebarRow(draft: binding, model: model)
+                        .tag(draft.id)
+                        .contextMenu {
+                            Button(draft.project.isEnabled ? "Turn Off" : "Turn On") { binding.wrappedValue.project.isOn.toggle() }
+                            Divider()
+                            Button("Delete…", role: .destructive) { pendingDelete = draft.id }
+                        }
                 }
                 .onMove { model.move(from: $0, to: $1) }
             }
             Divider()
+            .deleteConfirmation(
+                isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+                draft: model.drafts.first { $0.id == pendingDelete },
+                model: model
+            )
             HStack(spacing: 2) {
                 Menu {
                     Button("Add from Launcher App…") { chooseLauncherToAdd() }
@@ -56,14 +74,18 @@ struct ProjectsEditorView: View {
                 .help("Add a project")
 
                 Button {
-                    if let id = model.selection { model.remove(id) }
+                    pendingDelete = model.selection
                 } label: {
                     Image(systemName: "minus").frame(width: 22, height: 20)
                 }
                 .buttonStyle(.borderless)
                 .disabled(model.selection == nil)
-                .help("Remove the selected project")
+                .help("Delete the selected project")
                 Spacer()
+                if model.isAdding {
+                    ProgressView().controlSize(.small)
+                    Text("Adding…").font(.caption).foregroundStyle(.secondary)
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -82,10 +104,10 @@ struct ProjectsEditorView: View {
             }
             .fixedSize()
             .help(model.configRepoName.map { "Synced with github.com/\($0)" } ?? "Not a git repo, so not synced")
-            if let error = model.saveError {
+            if let error = model.loadFailure ?? model.saveError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
-                    .lineLimit(2)
+                    .lineLimit(3)
             } else if let status = model.syncStatus {
                 Text(status)
                     .font(.caption)
@@ -98,7 +120,7 @@ struct ProjectsEditorView: View {
             Button("Save") { model.save() }
                 .keyboardShortcut("s")
                 .buttonStyle(.borderedProminent)
-                .disabled(!model.isDirty)
+                .disabled(!model.canSave)
         }
         .padding(12)
     }
@@ -169,6 +191,7 @@ private struct ProjectForm: View {
     @State private var findingLogo = false
     @State private var dropTargeted = false
     @State private var idlePanesText = ""
+    @State private var confirmingDelete = false
 
     var body: some View {
         Form {
@@ -252,7 +275,9 @@ private struct ProjectForm: View {
                     TextField("Idle Panes", text: $idlePanesText, prompt: Text("Working, Tools"))
                         .onChange(of: idlePanesText) { _, text in
                             let panes = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                            draft.project.idlePanes = panes.isEmpty ? nil : panes
+                            let parsed = panes.isEmpty ? nil : panes
+                            // Filling the field on appear also fires this; only a real edit should mark the project changed.
+                            if parsed != draft.project.idlePanes { draft.project.idlePanes = parsed }
                         }
                 }
             } header: {
@@ -272,8 +297,20 @@ private struct ProjectForm: View {
                     }
                 }
             }
+
+            Section {
+                HStack {
+                    Spacer()
+                    Button("Delete Project…", role: .destructive) { confirmingDelete = true }
+                }
+            } footer: {
+                Text("Removes it from your project list when you save. Its folder and launcher are left alone. To hide it for a while instead, turn off Show in Picker.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
+        .deleteConfirmation(isPresented: $confirmingDelete, draft: draft, model: model)
         .onAppear { idlePanesText = (draft.project.idlePanes ?? []).joined(separator: ", ") }
         .task(id: draft.project.launcher) { await model.loadDetection(for: draft.project.launcher) }
     }
@@ -406,6 +443,14 @@ extension Project {
 
 @MainActor
 private func chooseConfigFolder(model: EditorModel) {
+    if model.isDirty {
+        let alert = NSAlert()
+        alert.messageText = "Discard unsaved changes?"
+        alert.informativeText = "Switching config folders loads that folder's projects. Your unsaved changes here will be lost."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Discard Changes")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+    }
     let panel = NSOpenPanel()
     panel.message = "Choose the folder holding projects.json, or an empty folder for a new config."
     panel.canChooseFiles = false
@@ -475,5 +520,21 @@ private struct SetupView: View {
         .padding(32)
         .frame(maxWidth: 560)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private extension View {
+    /// Asks before deleting; the deletion itself, like every edit, takes effect on Save.
+    func deleteConfirmation(isPresented: Binding<Bool>, draft: ProjectDraft?, model: EditorModel) -> some View {
+        alert(
+            "Delete “\(draft?.project.name ?? "project")”?",
+            isPresented: isPresented,
+            presenting: draft
+        ) { draft in
+            Button("Delete", role: .destructive) { model.remove(draft.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { draft in
+            Text("It's removed from your project list when you save; Revert undoes it. \(draft.project.path) isn't touched. To hide it for a while instead, turn it off.")
+        }
     }
 }

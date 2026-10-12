@@ -144,35 +144,21 @@ enum ITerm {
         }
     }
 
-    /// Runs AppleScript through osascript so it can execute off the main thread.
-    private static func runAppleScript(_ source: String, arguments: [String] = []) -> Result<String, ScriptError> {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    /// Runs AppleScript through osascript so it can execute off the main thread. Apple events to a busy iTerm can
+    /// otherwise wait up to two minutes; status is polled every few seconds, so give up quickly instead.
+    private static func runAppleScript(_ source: String, arguments: [String] = [], timeout: TimeInterval = 8) -> Result<String, ScriptError> {
         // "-" reads the script from stdin; the rest become the run handler's argv.
-        process.arguments = ["-"] + arguments
-        let input = Pipe(), output = Pipe(), errors = Pipe()
-        process.standardInput = input
-        process.standardOutput = output
-        process.standardError = errors
-        do {
-            try process.run()
-        } catch {
-            return .failure(ScriptError(message: error.localizedDescription, code: nil))
+        let output = Shell.run("/usr/bin/osascript", ["-"] + arguments, input: source, timeout: timeout)
+        if output.timedOut {
+            return .failure(ScriptError(message: "iTerm didn't respond within \(Int(timeout)) seconds.", code: nil))
         }
-        input.fileHandleForWriting.write(Data(source.utf8))
-        try? input.fileHandleForWriting.close()
-        let stdout = output.fileHandleForReading.readDataToEndOfFile()
-        let stderr = errors.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            let message = String(decoding: stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard output.status == 0 else {
             // osascript ends its error text with the code, e.g. "… (-1743)".
-            let code = message.range(of: #"\((-?\d+)\)$"#, options: .regularExpression)
-                .flatMap { Int(message[$0].dropFirst().dropLast()) }
-            return .failure(ScriptError(message: message, code: code))
+            let code = output.stderr.range(of: #"\((-?\d+)\)$"#, options: .regularExpression)
+                .flatMap { Int(output.stderr[$0].dropFirst().dropLast()) }
+            return .failure(ScriptError(message: output.stderr, code: code))
         }
-        return .success(String(decoding: stdout, as: UTF8.self))
+        return .success(output.stdout)
     }
 }
 
@@ -181,18 +167,11 @@ enum Processes {
 
     /// TTYs whose foreground job is something other than an idle shell — i.e. a pane that's running a server.
     static func busyTTYs() -> Set<String> {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-A", "-o", "tty=,stat=,comm="]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return [] }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        let output = Shell.run("/bin/ps", ["-A", "-o", "tty=,stat=,comm="], timeout: 5)
+        guard output.succeeded else { return [] }
 
         var busy = Set<String>()
-        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+        for line in output.stdout.split(separator: "\n") {
             let fields = line.split(maxSplits: 2, whereSeparator: { $0 == " " })
             guard fields.count == 3 else { continue }
             let (tty, stat) = (String(fields[0]), fields[1])

@@ -2,10 +2,16 @@ import AppKit
 import SwiftUI
 
 struct ProjectDraft: Identifiable, Equatable {
-    let id = UUID()
+    let id: UUID
     var project: Project
     /// A newly chosen logo (already normalized PNG data), written to icons/<id>.png on save.
     var pendingIcon: Data?
+
+    init(id: UUID = UUID(), project: Project, pendingIcon: Data? = nil) {
+        self.id = id
+        self.project = project
+        self.pendingIcon = pendingIcon
+    }
 }
 
 struct EditorIssue: Hashable {
@@ -23,13 +29,23 @@ final class EditorModel: ObservableObject {
 
     /// Sync state of the config repo, shown in the editor's footer.
     @Published private(set) var syncStatus: String?
+    /// The config repo's GitHub `owner/name`, looked up off the main thread whenever the folder changes.
+    @Published private(set) var configRepoName: String?
+    /// Set when projects.json exists but can't be read. Saving is blocked so an empty list can't overwrite it.
+    @Published private(set) var loadFailure: String?
     /// True while first-run setup is cloning or creating a config.
     @Published private(set) var isSettingUp = false
+    /// True while "Add from Launcher App…" inspects the launcher and project.
+    @Published private(set) var isAdding = false
 
     private(set) var fileURL: URL
     private var savedProjects: [Project] = []
     private var comment: String?
+    /// The bytes of projects.json as last loaded or saved, to notice changes made underneath the editor.
+    private var loadedData: Data?
     private var iconCache: [String: NSImage] = [:]
+    private var missingIcons: Set<String> = []
+    private var pendingIconCache: [UUID: (data: Data, image: NSImage)] = [:]
 
     init(fileURL: URL) {
         self.fileURL = fileURL
@@ -40,8 +56,6 @@ final class EditorModel: ObservableObject {
     /// No projects.json yet: the editor offers to clone or create one.
     var needsSetup: Bool { !FileManager.default.fileExists(atPath: fileURL.path) }
 
-    var configRepoName: String? { GitHub.repoName(of: baseURL) }
-
     var isDirty: Bool {
         drafts.map(\.project) != savedProjects || drafts.contains { $0.pendingIcon != nil }
     }
@@ -50,39 +64,75 @@ final class EditorModel: ObservableObject {
         drafts.contains { issues(for: $0).contains(where: \.isError) }
     }
 
+    var canSave: Bool { isDirty && loadFailure == nil }
+
     // MARK: - Loading and saving
 
+    /// Reads projects.json. Drafts keep their identity (and the selection stays put) for projects that are still
+    /// there, so a reload doesn't reset the form being edited.
     func load() {
-        let selectedIndex = selection.flatMap { id in drafts.firstIndex { $0.id == id } } ?? 0
+        let selectedProjectID = selection.flatMap { id in drafts.first { $0.id == id }?.project.id }
+        let existingIDs = Dictionary(drafts.map { ($0.project.id, $0.id) }, uniquingKeysWith: { first, _ in first })
+        iconCache = [:]
+        missingIcons = []
+        pendingIconCache = [:]
         guard !needsSetup else {
             savedProjects = []
             drafts = []
             selection = nil
+            loadedData = nil
+            loadFailure = nil
             return
         }
         do {
-            let file = try JSONDecoder().decode(ConfigFile.self, from: Data(contentsOf: fileURL))
+            let data = try Data(contentsOf: fileURL)
+            var file = try JSONDecoder().decode(ConfigFile.self, from: data)
+            // `"enabled": true` means the same as leaving it out; normalize so toggling off and on isn't a change.
+            for index in file.projects.indices where file.projects[index].enabled == true {
+                file.projects[index].enabled = nil
+            }
             comment = file.comment
             savedProjects = file.projects
+            loadedData = data
+            loadFailure = nil
             saveError = nil
         } catch {
+            comment = nil
             savedProjects = []
-            saveError = "Couldn't read \(fileURL.lastPathComponent): \(error.localizedDescription)"
+            loadedData = nil
+            loadFailure = "Couldn't read \(fileURL.lastPathComponent): \(error.localizedDescription) Fix the file (Open projects.json), then reopen this window. Saving is disabled so the list isn't overwritten."
         }
-        drafts = savedProjects.map { ProjectDraft(project: $0) }
-        iconCache = [:]
-        selection = drafts.indices.contains(selectedIndex) ? drafts[selectedIndex].id : drafts.first?.id
+        drafts = savedProjects.map { ProjectDraft(id: existingIDs[$0.id] ?? UUID(), project: $0) }
+        selection = drafts.first { $0.project.id == selectedProjectID }?.id ?? drafts.first?.id
+        refreshRepoName()
+    }
+
+    /// Reloads when projects.json changed on disk (e.g. a pull brought in another Mac's edits) and nothing here
+    /// is unsaved. With unsaved edits, `save()` refuses instead of overwriting the newer file.
+    func reloadIfChangedOnDisk() {
+        guard !isDirty, (try? Data(contentsOf: fileURL)) != loadedData else { return }
+        load()
+    }
+
+    private var changedOnDiskSinceLoad: Bool {
+        guard let loadedData else { return false }
+        return (try? Data(contentsOf: fileURL)) != loadedData
     }
 
     func save() {
+        guard loadFailure == nil else { return }
         guard !hasErrors else {
             saveError = "Fix the problems marked in red before saving."
+            return
+        }
+        guard !changedOnDiskSinceLoad else {
+            saveError = "projects.json changed since this window loaded it (probably pulled from another Mac). Click Revert to load the latest, then make your change again."
             return
         }
         do {
             for index in drafts.indices {
                 if drafts[index].project.id.isEmpty {
-                    drafts[index].project.id = Self.slug(drafts[index].project.name)
+                    drafts[index].project.id = uniqueID(Self.slug(drafts[index].project.name), excluding: index)
                 }
                 guard let png = drafts[index].pendingIcon else { continue }
                 let relative = "icons/\(drafts[index].project.id).png"
@@ -93,14 +143,25 @@ final class EditorModel: ObservableObject {
                 drafts[index].pendingIcon = nil
             }
             try ConfigFile(comment: comment, projects: drafts.map(\.project)).write(to: fileURL)
+            loadedData = try? Data(contentsOf: fileURL)
+            removeOrphanedIcons(previouslySaved: savedProjects)
             savedProjects = drafts.map(\.project)
             iconCache = [:]
+            missingIcons = []
             saveError = nil
         } catch {
             saveError = "Couldn't save: \(error.localizedDescription)"
             return
         }
         push()
+    }
+
+    /// Deletes logos in the config's icons/ folder that only deleted projects used.
+    private func removeOrphanedIcons(previouslySaved: [Project]) {
+        let stillUsed = Set(drafts.compactMap(\.project.icon))
+        for icon in Set(previouslySaved.compactMap(\.icon)).subtracting(stillUsed) where icon.hasPrefix("icons/") {
+            try? FileManager.default.removeItem(at: baseURL.appendingPathComponent(icon))
+        }
     }
 
     // MARK: - Config repo sync
@@ -113,38 +174,53 @@ final class EditorModel: ObservableObject {
         }
         syncStatus = "Pushing…"
         let folder = baseURL
+        let repoName = configRepoName ?? "the config repo"
         Task {
             let result = await Task.detached { GitHub.commitAndPush(folder, message: "Update projects") }.value
+            guard folder == baseURL else { return }  // The config folder changed meanwhile.
             switch result {
-            case .success: syncStatus = "Saved and pushed to \(configRepoName ?? "the config repo")."
-            case .failure(let failure): syncStatus = "Saved, but couldn't push: \(failure.message)"
+            case .success: syncStatus = "Saved and pushed to \(repoName)."
+            case .failure(let failure): syncStatus = "Saved here, but couldn't push: \(failure.message)"
             }
+            loadedData = try? Data(contentsOf: fileURL)  // A pull during the push may have rebased the file.
         }
     }
 
     /// Shows what's on disk right away, then pulls edits made on other Macs and reloads if anything changed.
-    /// The reload is skipped once there's unsaved work here.
     func pullAndLoad() {
         guard !isDirty else { return }
         load()
-        guard !needsSetup, GitHub.isRepository(baseURL) else { return }
+        guard !needsSetup, loadFailure == nil, GitHub.isRepository(baseURL) else { return }
         let folder = baseURL
-        let before = try? Data(contentsOf: fileURL)
         Task {
             let result = await Task.detached { GitHub.pull(folder) }.value
+            guard folder == baseURL else { return }
             if case .failure(let failure) = result {
                 syncStatus = "Couldn't pull the latest config: \(failure.message)"
             }
-            if !isDirty, (try? Data(contentsOf: fileURL)) != before { load() }
+            reloadIfChangedOnDisk()
+        }
+    }
+
+    private func refreshRepoName() {
+        let folder = baseURL
+        Task {
+            let name = await Task.detached { GitHub.repoName(of: folder) }.value
+            if folder == baseURL { configRepoName = name }
         }
     }
 
     // MARK: - Config folder and first-run setup
 
+    /// The caller confirms discarding unsaved changes first.
     func switchFolder(to folder: URL) {
         ConfigStore.folder = folder
         fileURL = folder.appendingPathComponent("projects.json")
         syncStatus = nil
+        saveError = nil
+        configRepoName = nil
+        drafts = []
+        savedProjects = []
         load()
         NotificationCenter.default.post(name: .configFolderDidChange, object: nil)
     }
@@ -154,11 +230,15 @@ final class EditorModel: ObservableObject {
         let repo = repo.trimmingCharacters(in: .whitespaces)
         guard !repo.isEmpty else { return }
         let folder = baseURL
-        if let contents = try? FileManager.default.contentsOfDirectory(atPath: folder.path), !contents.isEmpty {
-            saveError = "\(EditorModel.abbreviate(folder)) already has files in it. Choose an empty config folder first."
+        let contents = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        if contents.contains(where: { !$0.hasPrefix(".") }) {
+            saveError = "\(Self.abbreviate(folder)) already has files in it. Choose an empty config folder first."
             return
         }
+        // git won't clone into a non-empty folder, so clear out stray dotfiles such as .DS_Store.
+        for name in contents { try? FileManager.default.removeItem(at: folder.appendingPathComponent(name)) }
         isSettingUp = true
+        saveError = nil
         Task {
             let result = await Task.detached { GitHub.clone(repo, to: folder) }.value
             isSettingUp = false
@@ -172,22 +252,23 @@ final class EditorModel: ObservableObject {
     /// Starts a new config from the example bundled with the app.
     func createConfig() {
         let folder = baseURL
+        let fm = FileManager.default
         do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
             if let example = Bundle.main.url(forResource: "examples", withExtension: nil) {
-                try FileManager.default.copyItem(
-                    at: example.appendingPathComponent("projects.example.json"), to: fileURL
-                )
                 let icons = example.appendingPathComponent("icons")
-                if FileManager.default.fileExists(atPath: icons.path) {
-                    try FileManager.default.copyItem(at: icons, to: folder.appendingPathComponent("icons"))
+                let destinationIcons = folder.appendingPathComponent("icons")
+                if fm.fileExists(atPath: icons.path), !fm.fileExists(atPath: destinationIcons.path) {
+                    try fm.copyItem(at: icons, to: destinationIcons)
                 }
+                // Written last: its presence is what marks the setup as done.
+                try fm.copyItem(at: example.appendingPathComponent("projects.example.json"), to: fileURL)
             } else {
                 try ConfigFile(comment: nil, projects: []).write(to: fileURL)
             }
             switchFolder(to: folder)
         } catch {
-            saveError = "Couldn't create a config in \(EditorModel.abbreviate(folder)): \(error.localizedDescription)"
+            saveError = "Couldn't create a config in \(Self.abbreviate(folder)): \(error.localizedDescription)"
         }
     }
 
@@ -212,39 +293,52 @@ final class EditorModel: ObservableObject {
     }
 
     /// Adds a project from its launcher app, filling in everything the launcher's script reveals.
+    /// Inspecting the launcher and searching the project for a logo can take a while, so it runs off the main thread.
     func add(launcher app: URL) {
-        let detection = LauncherInspector.inspect(app)
-        detections[app.path] = detection
-        let name = detection.suggestedName ?? app.deletingPathExtension().lastPathComponent
-        var project = Project(
-            id: uniqueID(Self.slug(name)), name: name,
-            path: Self.abbreviate(app.deletingLastPathComponent()), launcher: Self.abbreviate(app),
-            match: .init(variable: "")
-        )
-        project.repo = GitHub.repoName(of: app.deletingLastPathComponent())
-        apply(detection, to: &project)
-        var draft = ProjectDraft(project: project)
-        // Start with the best logo the project folder has, if any.
-        if let logo = IconFinder.candidates(in: project.pathURL, limit: 1).first {
-            draft.pendingIcon = NSImage(contentsOf: logo).flatMap(IconImage.normalizedPNG)
+        isAdding = true
+        Task {
+            let (detection, repo, logo) = await Task.detached {
+                let folder = app.deletingLastPathComponent()
+                let logo = IconFinder.candidates(in: folder, limit: 1).first
+                    .flatMap(NSImage.init(contentsOf:))
+                    .flatMap(IconImage.normalizedPNG)
+                return (LauncherInspector.inspect(app), GitHub.repoName(of: folder), logo)
+            }.value
+            isAdding = false
+            detections[app.path] = detection
+            let name = detection.suggestedName ?? app.deletingPathExtension().lastPathComponent
+            var project = Project(
+                id: uniqueID(Self.slug(name)), name: name,
+                path: Self.abbreviate(app.deletingLastPathComponent()), launcher: Self.abbreviate(app),
+                match: .init(variable: "")
+            )
+            project.repo = repo
+            apply(detection, to: &project)
+            let draft = ProjectDraft(project: project, pendingIcon: logo)
+            drafts.append(draft)
+            selection = draft.id
         }
-        drafts.append(draft)
-        selection = draft.id
     }
 
     /// Fills in the GitHub repo from the project folder's `origin` remote.
     func detectRepo(for id: ProjectDraft.ID) {
-        guard let index = drafts.firstIndex(where: { $0.id == id }) else { return }
-        if let repo = GitHub.repoName(of: drafts[index].project.pathURL) {
-            drafts[index].project.repo = repo
-        } else {
-            saveError = "\(drafts[index].project.path) has no GitHub origin remote."
+        guard let draft = drafts.first(where: { $0.id == id }) else { return }
+        let folder = draft.project.pathURL
+        Task {
+            let repo = await Task.detached { GitHub.repoName(of: folder) }.value
+            guard let index = drafts.firstIndex(where: { $0.id == id }) else { return }
+            if let repo {
+                drafts[index].project.repo = repo
+            } else {
+                saveError = "\(drafts[index].project.path) isn't a git repo with a GitHub origin remote."
+            }
         }
     }
 
     func remove(_ id: ProjectDraft.ID) {
         guard let index = drafts.firstIndex(where: { $0.id == id }) else { return }
         drafts.remove(at: index)
+        pendingIconCache[id] = nil
         selection = drafts.indices.contains(index) ? drafts[index].id : drafts.last?.id
     }
 
@@ -279,11 +373,14 @@ final class EditorModel: ObservableObject {
 
     /// Overwrites the status-detection fields with what the launcher reveals.
     func applyDetection(to id: ProjectDraft.ID) {
-        guard let index = drafts.firstIndex(where: { $0.id == id }) else { return }
-        let url = drafts[index].project.launcherURL
-        let detection = LauncherInspector.inspect(url)
-        detections[url.path] = detection
-        apply(detection, to: &drafts[index].project)
+        guard let draft = drafts.first(where: { $0.id == id }) else { return }
+        let url = draft.project.launcherURL
+        Task {
+            let detection = await Task.detached { LauncherInspector.inspect(url) }.value
+            detections[url.path] = detection
+            guard let index = drafts.firstIndex(where: { $0.id == id }) else { return }
+            apply(detection, to: &drafts[index].project)
+        }
     }
 
     private func apply(_ detection: LauncherDetection, to project: inout Project) {
@@ -296,13 +393,23 @@ final class EditorModel: ObservableObject {
 
     // MARK: - Presentation
 
+    /// Called while rendering, so it must stay cheap: decoded logos and missing files are both cached.
     func image(for draft: ProjectDraft) -> NSImage? {
-        if let png = draft.pendingIcon { return NSImage(data: png) }
+        if let png = draft.pendingIcon {
+            if let cached = pendingIconCache[draft.id], cached.data == png { return cached.image }
+            guard let image = NSImage(data: png) else { return nil }
+            pendingIconCache[draft.id] = (png, image)
+            return image
+        }
         guard let icon = draft.project.icon else { return nil }
-        let url = ConfigStore.resolve(icon, against: baseURL)
-        if let cached = iconCache[url.path] { return cached }
-        let image = NSImage(contentsOf: url)
-        iconCache[url.path] = image
+        let path = ConfigStore.resolve(icon, against: baseURL).path
+        if let cached = iconCache[path] { return cached }
+        if missingIcons.contains(path) { return nil }
+        guard let image = NSImage(contentsOfFile: path) else {
+            missingIcons.insert(path)
+            return nil
+        }
+        iconCache[path] = image
         return image
     }
 
@@ -313,8 +420,11 @@ final class EditorModel: ObservableObject {
         if project.name.trimmingCharacters(in: .whitespaces).isEmpty {
             issues.append(.init(message: "Give the project a name.", isError: true))
         }
-        let id = project.id.isEmpty ? Self.slug(project.name) : project.id
-        if drafts.filter({ ($0.project.id.isEmpty ? Self.slug($0.project.name) : $0.project.id) == id }).count > 1 {
+        if !project.id.isEmpty, project.id.contains(where: { !($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }) {
+            issues.append(.init(message: "The ID can only contain letters, numbers, - and _.", isError: true))
+        }
+        let id = effectiveID(of: project)
+        if drafts.filter({ effectiveID(of: $0.project) == id }).count > 1 {
             issues.append(.init(message: "Another project already uses the ID “\(id)”.", isError: true))
         }
         let installed = project.path.isEmpty || fm.fileExists(atPath: project.pathURL.path)
@@ -331,15 +441,19 @@ final class EditorModel: ObservableObject {
             issues.append(.init(message: "Not on this Mac (no folder at \(project.path)). \(fix)", isError: false))
         }
         if draft.pendingIcon == nil {
-            if let icon = project.icon {
-                if !fm.fileExists(atPath: ConfigStore.resolve(icon, against: baseURL).path) {
-                    issues.append(.init(message: "The logo file \(icon) is missing.", isError: false))
-                }
-            } else {
+            if project.icon == nil {
                 issues.append(.init(message: "No logo yet; the picker will show a letter tile.", isError: false))
+            } else if image(for: draft) == nil {
+                issues.append(.init(message: "The logo file \(project.icon ?? "") is missing.", isError: false))
             }
         }
         return issues
+    }
+
+    /// The ID a project is saved under: its own, or one derived from its name. Compared case-insensitively,
+    /// since icon files are named after it on a case-insensitive file system.
+    private func effectiveID(of project: Project) -> String {
+        (project.id.isEmpty ? Self.slug(project.name) : project.id).lowercased()
     }
 
     static func slug(_ name: String) -> String {
@@ -350,11 +464,12 @@ final class EditorModel: ObservableObject {
         (url.path as NSString).abbreviatingWithTildeInPath
     }
 
-    private func uniqueID(_ base: String) -> String {
-        let taken = Set(drafts.map(\.project.id))
-        var candidate = base.isEmpty ? "project" : base
+    private func uniqueID(_ base: String, excluding excludedIndex: Int? = nil) -> String {
+        let taken = Set(drafts.indices.filter { $0 != excludedIndex }.map { drafts[$0].project.id.lowercased() })
+        let base = base.isEmpty ? "project" : base
+        var candidate = base
         var suffix = 2
-        while taken.contains(candidate) {
+        while taken.contains(candidate.lowercased()) {
             candidate = "\(base)\(suffix)"
             suffix += 1
         }

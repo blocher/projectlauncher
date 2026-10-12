@@ -19,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Projects being cloned from GitHub right now.
     private var installing: Set<String> = []
     private var pollCompletions: [() -> Void] = []
+    /// Bumped when the config folder changes, so results of a scan started before then are ignored.
+    private var scanGeneration = 0
+    private var configPullInFlight = false
     private let pollQueue = DispatchQueue(label: "ProjectLauncher.poll")
     /// Only touched on `pollQueue`.
     nonisolated(unsafe) private let scanner = StatusScanner()
@@ -43,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         config.reloadIfChanged()
         iconCache.removeAll()
         statuses = [:]
+        scanGeneration += 1  // A scan still in flight belongs to the old folder; its results are dropped.
         refresh(fresh: true)
     }
 
@@ -81,6 +85,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if NSApp.isActive { return showPicker() }
         pickerPendingActivation = true
         NSApp.activate()
+        // If macOS declines the activation, don't let the request pop a picker at some random later moment.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.pickerPendingActivation = false }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -91,8 +97,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Left-click on the Dock icon while we're running.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        pickerPendingActivation = false  // This click shows the picker; a pending launch request mustn't add another.
         DispatchQueue.main.async { self.showPicker() }
         return false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        editor?.confirmDiscardingChanges() == false ? .terminateCancel : .terminateNow
     }
 
     /// Right-click (or long-press) on the Dock icon.
@@ -103,13 +114,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Config sync
 
-    /// Brings in config edits pushed from another Mac. The file watcher picks up the change on the next poll.
+    /// Brings in config edits pushed from another Mac. The picker re-reads the file on its next poll, and an open
+    /// editor reloads if it has no unsaved changes.
     private func pullConfig() {
-        guard config.exists, editor?.hasUnsavedChanges != true else { return }
+        guard config.exists, !configPullInFlight, editor?.hasUnsavedChanges != true else { return }
+        configPullInFlight = true
         let folder = config.baseURL
+        let file = config.fileURL
         DispatchQueue.global(qos: .utility).async {
-            if case .failure(let failure) = GitHub.pull(folder) {
-                NSLog("ProjectLauncher: config pull failed: \(failure.message)")
+            let before = try? Data(contentsOf: file)
+            let result = GitHub.pull(folder)
+            let changed = (try? Data(contentsOf: file)) != before
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.configPullInFlight = false
+                    if case .failure(let failure) = result {
+                        NSLog("ProjectLauncher: config pull failed: \(failure.message)")
+                    } else if changed {
+                        NotificationCenter.default.post(name: .configDidChangeOnDisk, object: nil)
+                    }
+                }
             }
         }
     }
@@ -123,16 +147,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         polling = true
         if config.reloadIfChanged() { iconCache.removeAll() }
         let projects = scannableProjects
+        let generation = scanGeneration
         pollQueue.async {
             let result = self.scanner.scan(projects, fresh: fresh)
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { self.apply(result) }
+                MainActor.assumeIsolated { self.apply(result, generation: generation) }
             }
         }
     }
 
-    private func apply(_ result: Result<[String: ProjectStatus], ScriptError>) {
+    private func apply(_ result: Result<[String: ProjectStatus], ScriptError>, generation: Int) {
         polling = false
+        guard generation == scanGeneration else {
+            refresh(fresh: true)  // Stale: started before the config folder changed. Completions wait for this one.
+            return
+        }
         switch result {
         case .success(let updated):
             statusError = nil
@@ -144,7 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             launchedAt[id] = nil
         }
 
-        let running = statuses.values.filter { $0.windowID != nil }.count
+        let running = Set(statuses.values.compactMap(\.windowID)).count
         NSApp.dockTile.badgeLabel = running > 0 ? "\(running)" : nil
         refreshVisibleRows()
 
@@ -168,6 +197,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Menus
 
     private func showPicker() {
+        // A status result delivered while the picker is tracking (e.g. the launch-time completion) must not
+        // open a second picker inside the first.
+        guard !pickerIsOpen else { return }
         let menu = buildMenu(forDock: false)
         NSApp.activate()
         refresh(fresh: true)
@@ -265,7 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Applies current status to a project row. Safe to call while the menu is open.
-    private func decorate(_ row: NSMenuItem, for project: Project) {
+    private func decorate(_ row: NSMenuItem, for project: Project, rebuildActions: Bool = true) {
         let status = status(for: project)
         row.image = icon(for: project, health: status.health)
         row.subtitle = status.summary
@@ -274,7 +306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let submenu = row.submenu else { return }
         let kind = actionKind(for: status)
         // Rebuild actions only when they'd change, so an open submenu isn't disturbed needlessly.
-        if submenu.items.isEmpty || submenu.title != kind.rawValue {
+        if submenu.items.isEmpty || (rebuildActions && submenu.title != kind.rawValue) {
             fillActions(submenu, for: project, kind: kind)
         }
         if kind == .running || kind == .stopped, let primary = submenu.items.first {
@@ -473,11 +505,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MainActor.assumeIsolated {
                     self.installing.remove(project.id)
                     if case .failure(let failure) = result {
-                        let alert = NSAlert()
-                        alert.messageText = "Couldn't install \(project.name)"
-                        alert.informativeText = "gh repo clone \(repo) \(project.path)\n\n\(failure.message)"
-                        NSApp.activate()
-                        alert.runModal()
+                        self.presentAlert(
+                            "Couldn't install \(project.name)",
+                            "gh repo clone \(repo) \(project.path)\n\n\(failure.message)"
+                        )
                     }
                     self.refresh(fresh: true)
                 }
@@ -485,9 +516,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Live status updates for the menu on screen. While it's open, only icons and subtitles change: rebuilding a
+    /// submenu under the pointer would move or remove the item being chosen. Actions re-check status when run.
+    /// The picker hides the app after an action, and macOS may refuse to reactivate it, so unhide and force the
+    /// alert in front; otherwise a modal alert could block the app while sitting invisible.
+    private func presentAlert(_ title: String, _ message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        NSApp.unhide(nil)
+        NSApp.activate()
+        alert.layout()
+        alert.window.orderFrontRegardless()
+        alert.runModal()
+    }
+
     private func refreshVisibleRows() {
         for (id, item) in visibleRows {
-            if let project = config.project(id: id) { decorate(item, for: project) }
+            if let project = config.project(id: id) { decorate(item, for: project, rebuildActions: !pickerIsOpen) }
         }
     }
 
@@ -535,11 +581,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.launchedAt[project.id] = nil
-                    let alert = NSAlert()
-                    alert.messageText = "Couldn't launch \(project.name)"
-                    alert.informativeText = "\(project.launcherURL.path)\n\n\(error.localizedDescription)"
-                    NSApp.activate()
-                    alert.runModal()
+                    self.presentAlert("Couldn't launch \(project.name)", "\(project.launcherURL.path)\n\n\(error.localizedDescription)")
                 }
             }
         }

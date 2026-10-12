@@ -204,7 +204,7 @@ enum IconImage {
 }
 
 /// The parts of a generated launcher's embedded spec that Project Launcher reads. The generator
-/// (generator/launcher.py) owns the format; see generator/SPEC.md.
+/// (skills/dev-launcher/launcher.py) owns the format; see skills/dev-launcher/SPEC.md.
 struct LauncherSpec: Codable, Equatable {
     struct Pane: Codable, Equatable {
         let role: String

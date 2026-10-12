@@ -74,12 +74,12 @@ that live in the repo and need nothing but macOS and iTerm2. Anyone who clones t
 Each generated launcher's form in the editor has **Edit Launcher…** (change its panes, commands and ports) and
 **Regenerate Launcher** (rebuild it from its embedded spec after Project Launcher's template improves).
 
-The generator also works from the command line; see [generator/SPEC.md](generator/SPEC.md):
+The generator also works from the command line; see [skills/dev-launcher/SPEC.md](skills/dev-launcher/SPEC.md):
 
 ```bash
-python3 generator/launcher.py detect ~/projects/myapp > draft.json
-python3 generator/launcher.py render spec.json --repo ~/projects/myapp
-python3 generator/launcher.py regenerate ~/projects/myapp/StartMyAppDev.applescript
+python3 skills/dev-launcher/launcher.py detect ~/projects/myapp > draft.json
+python3 skills/dev-launcher/launcher.py render spec.json --repo ~/projects/myapp
+python3 skills/dev-launcher/launcher.py regenerate ~/projects/myapp/StartMyAppDev.applescript
 ```
 
 ## Editing projects

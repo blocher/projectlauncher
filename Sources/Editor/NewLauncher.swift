@@ -257,7 +257,7 @@ struct LauncherDraftView: View {
                             .font(.system(.caption, design: .monospaced))
                             .frame(minHeight: 220)
                         HStack {
-                            Text("Every field is described in generator/SPEC.md.").font(.caption).foregroundStyle(.secondary)
+                            Text("Every field is described in SPEC.md (skills/dev-launcher in the Project Launcher repo).").font(.caption).foregroundStyle(.secondary)
                             Spacer()
                             Button("Apply JSON") { model.applyJSON() }
                         }

@@ -1,6 +1,6 @@
 import Foundation
 
-/// A launcher spec, as defined by generator/SPEC.md. Edited in the New Launcher window; the generator renders it.
+/// A launcher spec, as defined by skills/dev-launcher/SPEC.md. Edited in the New Launcher window; the generator renders it.
 struct GeneratorSpec: Codable, Equatable {
     struct Pane: Codable, Equatable, Identifiable {
         var id = UUID()
@@ -120,7 +120,7 @@ struct ConfigChange: Codable, Equatable, Identifiable {
     }
 }
 
-/// Runs the bundled generator (generator/launcher.py) with the system Python. Everything blocks; call off the main thread.
+/// Runs the bundled generator (skills/dev-launcher/launcher.py) with the system Python. Everything blocks; call off the main thread.
 enum Generator {
     struct Draft: Decodable {
         var spec: GeneratorSpec
@@ -133,7 +133,7 @@ enum Generator {
     }
 
     static var scriptURL: URL? {
-        // PROJECTLAUNCHER_GENERATOR points tests (and development runs) at a checkout's generator/launcher.py.
+        // PROJECTLAUNCHER_GENERATOR points tests (and development runs) at a checkout's skills/dev-launcher/launcher.py.
         if let override = ProcessInfo.processInfo.environment["PROJECTLAUNCHER_GENERATOR"] { return URL(fileURLWithPath: override) }
         return Bundle.main.url(forResource: "generator", withExtension: nil)?.appendingPathComponent("launcher.py")
     }

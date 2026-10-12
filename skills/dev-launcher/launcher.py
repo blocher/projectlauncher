@@ -407,8 +407,10 @@ def browser_gate(spec: dict) -> str | None:
 # MARK: - Ports
 
 
-# Ports that other tools grab by default; generated launchers never use them.
-COMMON_PORTS = {3000, 3001, 4200, 5000, 5173, 5174, 6379, 8000, 8001, 8080, 8443, 8888, 9000}
+# Ports that common tools (Django, Vite, Create React App, Redis, RabbitMQ, ElasticMQ/SQS…) and long-established
+# projects grab by default; generated launchers never use them. Project Launcher also reserves every
+# project's own ports (its config `ports` and generated launchers).
+COMMON_PORTS = {3000, 3001, 4200, 5000, 5173, 5174, 5672, 6379, 8000, 8001, 8080, 8443, 8888, 9000, 9324, 9325}
 PORT_RANGES = {"backend": range(8010, 8100), "frontend": range(5180, 5300), "redis": range(6390, 6500), "other": range(8100, 8200)}
 
 

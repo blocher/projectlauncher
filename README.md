@@ -127,6 +127,7 @@ Choose **Edit Projects…** from the picker (or press ⌘, while the app is fron
 | `launcher` | The app that opens the project's iTerm window |
 | `icon` | Relative to the config folder, or absolute |
 | `url` | Opened by **Open in Browser** |
+| `ports` | Ports the project depends on beyond its generated launcher's own, e.g. a team repo whose URLs and OAuth callbacks assume them. Never assigned to another project; the editor flags any project that claims a port another one uses |
 | `match.variable` | The iTerm variable the launcher sets on its panes, read at session scope. For a launcher that tags its *window* instead, use `tab.window.<name>` together with `match.equals`. |
 | `idlePanes` | Pane roles (or names) that don't count toward health |
 

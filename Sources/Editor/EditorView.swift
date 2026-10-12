@@ -273,6 +273,18 @@ private struct ProjectForm: View {
                     EmptyView()
                 }
                 PathField(title: "Project Folder", path: $draft.project.path, choosesApp: false)
+                LabeledContent("Reserved Ports") {
+                    TextField("Reserved Ports", text: Binding(
+                        get: { (draft.project.ports ?? []).map(String.init).joined(separator: ", ") },
+                        set: { text in
+                            let ports = text.split(whereSeparator: { $0 == "," || $0 == " " }).compactMap { Int($0) }
+                            draft.project.ports = ports.isEmpty ? nil : ports
+                        }
+                    ), prompt: Text("e.g. 8000, 3000"))
+                    .labelsHidden()
+                    .multilineTextAlignment(.trailing)
+                }
+                .help("Ports this project depends on beyond its generated launcher's. They're never given to another project.")
                 LabeledContent("GitHub Repo") {
                     HStack(spacing: 6) {
                         TextField("GitHub Repo", text: $draft.project.repo.orEmpty, prompt: Text("owner/name"))

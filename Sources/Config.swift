@@ -21,6 +21,9 @@ struct Project: Codable, Equatable {
     var launcher: String
     var icon: String?
     var url: String?
+    /// Ports this project's local environment depends on beyond its generated launcher's own (e.g. a team repo
+    /// whose URLs and OAuth callbacks assume them). Project Launcher never assigns them to another project.
+    var ports: [Int]?
     var match: Match
     /// Panes that are idle shells by design and don't count toward service health.
     var idlePanes: [String]?
@@ -31,7 +34,7 @@ struct Project: Codable, Equatable {
 
     /// Declared so projects.json keeps a readable field order when the editor writes it.
     private enum CodingKeys: String, CodingKey {
-        case id, name, description, enabled, path, repo, launcher, icon, url, match, idlePanes
+        case id, name, description, enabled, path, repo, launcher, icon, url, ports, match, idlePanes
     }
 }
 
@@ -61,6 +64,9 @@ struct ConfigFile: Codable {
             fields.append(("launcher", try quoted(project.launcher)))
             if let icon = project.icon { fields.append(("icon", try quoted(icon))) }
             if let link = project.url { fields.append(("url", try quoted(link))) }
+            if let ports = project.ports, !ports.isEmpty {
+                fields.append(("ports", "[" + ports.map(String.init).joined(separator: ", ") + "]"))
+            }
             var match = "{ \"variable\": \(try quoted(project.match.variable))"
             if let equals = project.match.equals { match += ", \"equals\": \(try quoted(equals))" }
             fields.append(("match", match + " }"))

@@ -107,6 +107,10 @@ final class EditorModel: ObservableObject {
         drafts = savedProjects.map { ProjectDraft(id: existingIDs[$0.id] ?? UUID(), project: $0) }
         selection = drafts.first { $0.project.id == selectedProjectID }?.id ?? drafts.first?.id
         refreshRepoName()
+        // Every project's launcher ports are needed to spot port clashes, not just the selected project's.
+        for draft in drafts {
+            Task { await loadDetection(for: draft.project.launcher) }
+        }
     }
 
     /// Reloads when projects.json changed on disk (e.g. a pull brought in another Mac's edits) and nothing here
@@ -367,11 +371,19 @@ final class EditorModel: ObservableObject {
         detections[launcher.path] = nil
     }
 
-    /// Ports a new launcher must avoid: every other project's generated ports, plus anything listening right now.
+    /// Ports a project claims: the ones reserved in the config plus its generated launcher's own.
+    func claimedPorts(of draft: ProjectDraft) -> Set<Int> {
+        Set(draft.project.ports ?? []).union(detection(for: draft)?.spec?.panes.compactMap(\.port) ?? [])
+    }
+
+    /// Ports a new launcher must avoid: every other project's reserved and generated ports, plus anything listening
+    /// right now.
     private func takenPorts(excludingProject projectID: String?) async -> Set<Int> {
-        let launchers = drafts.filter { $0.project.id != projectID }.map(\.project.launcherURL)
+        let others = drafts.filter { $0.project.id != projectID }
+        let launchers = others.map(\.project.launcherURL)
+        let reserved = Set(others.flatMap { $0.project.ports ?? [] })
         return await Task.detached {
-            var ports = Set<Int>()
+            var ports = reserved
             for launcher in launchers where FileManager.default.fileExists(atPath: launcher.path) {
                 ports.formUnion(LauncherInspector.inspect(launcher).spec?.panes.compactMap(\.port) ?? [])
             }
@@ -489,6 +501,14 @@ final class EditorModel: ObservableObject {
         let id = effectiveID(of: project)
         if drafts.filter({ effectiveID(of: $0.project) == id }).count > 1 {
             issues.append(.init(message: "Another project already uses the ID “\(id)”.", isError: true))
+        }
+        let ports = claimedPorts(of: draft)
+        for other in drafts where other.id != draft.id {
+            let shared = ports.intersection(claimedPorts(of: other)).sorted()
+            if !shared.isEmpty {
+                let list = shared.map(String.init).joined(separator: ", ")
+                issues.append(.init(message: "Port \(list) is also used by \(other.project.name). Give one of them other ports.", isError: true))
+            }
         }
         let installed = project.path.isEmpty || fm.fileExists(atPath: project.pathURL.path)
         if project.launcher.isEmpty {

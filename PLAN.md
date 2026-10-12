@@ -1,5 +1,10 @@
 # Launcher generator plan
 
+**Status (2026-10-12): all four steps are built.** Spec format, renderer and template (`skills/dev-launcher/`);
+every personal project's launcher regenerated from a spec; New Project from Folder, Edit Launcher and
+Regenerate Launcher in the editor; the `dev-launcher` Claude Code skill; and a pull request bringing a team repo in
+line. The sections below are the design as agreed.
+
 Goal: point Project Launcher at any repo and generate a standalone iTerm dev launcher that ships with that repo
 (`StartXDev.applescript` + compiled `StartXDev.app`, both committed). Every launcher follows one pattern. Claude may
 help at generation time; the finished launcher never needs Claude or Project Launcher.

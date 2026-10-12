@@ -711,6 +711,11 @@ def write_launcher(spec: dict, repo: Path, *, compile_app: bool = True) -> tuple
         result = subprocess.run(["/usr/bin/osacompile", "-o", str(built), str(source)], capture_output=True, text=True)
         if result.returncode != 0:
             raise SpecError(f"osacompile failed:\n{result.stderr.strip()}")
+        # End PkgInfo with a newline before signing: end-of-file pre-commit hooks would otherwise add one and break
+        # the signature.
+        pkginfo = built / "Contents/PkgInfo"
+        if pkginfo.exists() and not pkginfo.read_bytes().endswith(b"\n"):
+            pkginfo.write_bytes(pkginfo.read_bytes() + b"\n")
         # Keep a custom icon from the previous launcher, if it had one.
         old_icon = app / "Contents/Resources/applet.icns"
         if old_icon.exists():

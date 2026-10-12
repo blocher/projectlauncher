@@ -74,6 +74,10 @@ that live in the repo and need nothing but macOS and iTerm2. Anyone who clones t
 Each generated launcher's form in the editor has **Edit Launcher…** (change its panes, commands and ports) and
 **Regenerate Launcher** (rebuild it from its embedded spec after Project Launcher's template improves).
 
+**Without Project Launcher:** the generator is also the `dev-launcher` Claude Code skill. Install it with
+`npx skills add blocher/projectlauncher --skill dev-launcher`, then ask Claude Code to "create a dev launcher for this
+repo" (or to change or regenerate one).
+
 The generator also works from the command line; see [skills/dev-launcher/SPEC.md](skills/dev-launcher/SPEC.md):
 
 ```bash
